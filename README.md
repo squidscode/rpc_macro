@@ -43,8 +43,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let _result = rpc_call!{rpc_defer!{ say_hello(p.clone()) }};
-    rpc_call!{ rpc_defer!{ say_goodbye(p.clone()) }};
-    rpc_call!( rpc_defer!( greet_person(p.clone(), p.clone() ) ) );
+    rpc_call!( rpc_defer!{ say_goodbye(p.clone())             });
+    rpc_call!( rpc_defer!{ greet_person(p.clone(), p.clone()) });
 
     Ok(())
 }
