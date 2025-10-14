@@ -72,7 +72,7 @@ pub fn rpc_functions(item: TokenStream) -> TokenStream {
 
     let rpc_enum_struct = quote! {
         #[derive(Serialize, Deserialize)]
-        enum RpcArgs {
+        pub enum RpcArgs {
             #(#fields,)*
         }
     };
