@@ -88,6 +88,7 @@ pub fn rpc_functions(item: TokenStream) -> TokenStream {
     );
 
     let rpc_call = quote!{
+        #[macro_export]
         macro_rules! rpc_call {
             ( $args: expr ) => {
                 match $args { #(
@@ -100,6 +101,7 @@ pub fn rpc_functions(item: TokenStream) -> TokenStream {
     };
 
     let rpc_defer = quote! {
+        #[macro_export]
         macro_rules! rpc_defer {
             #(
                 ( #function_names ( $($args:expr),* ) ) => {
