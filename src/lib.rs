@@ -19,6 +19,9 @@ pub fn rpc_functions(item: TokenStream) -> TokenStream {
     let mut function_names: Vec<syn::Ident> = vec![];
     let mut function_fields: Vec<Vec<syn::Ident>> = vec![];
     let mut function_types: Vec<Vec<syn::Type>> = vec![];
+    let mut n_bindings: Option<usize> = None;
+    let mut new_file_items: Vec<syn::Item> = vec![];
+
     for item in &file.items {
         match item {
             syn::Item::Fn(item_fn) => {
@@ -32,26 +35,113 @@ pub fn rpc_functions(item: TokenStream) -> TokenStream {
                 }).any(|b| b) {
                     panic!();
                 }
+
+                let bindings_in_cur_fn = 
+                    item_fn.sig.inputs.iter()
+                        .map(|fn_arg| 
+                        match fn_arg {
+                            syn::FnArg::Typed(pat_type) => {
+                                pat_type
+                            },
+                            _ => panic!()
+                        }).filter(|pat_type| {
+                            pat_type.attrs
+                                .iter()
+                                .any(|attr| match attr.meta.clone() {
+                                    syn::Meta::Path(path) => {
+                                        path.segments.last()
+                                            .map(|ps| ps.ident.to_string().eq("rpc_binding"))
+                                            .unwrap_or(false)
+                                    },
+                                    _ => false
+                                })
+                        })
+                        .count();
+                if let Some(n) = n_bindings && n != bindings_in_cur_fn {
+                    panic!("Number of bindings do not match per rpc function");
+                }
+                n_bindings = Some(bindings_in_cur_fn);
+
                 function_names.push(item_fn.sig.ident.clone());
                 function_fields.push(
-                    item_fn.sig.inputs.iter().map(|fn_arg| match fn_arg {
-                    syn::FnArg::Typed(pat_type) => {match *pat_type.pat.clone() {
-                        syn::Pat::Ident(pat_ident) => {pat_ident.ident},
-                        _ => panic!()
-                    }},
-                    _ => panic!()
-                }).collect());
+                    item_fn.sig.inputs.iter()
+                        .map(|fn_arg| 
+                        match fn_arg {
+                            syn::FnArg::Typed(pat_type) => {
+                                pat_type
+                            },
+                            _ => panic!()
+                        }).filter(|pat_type| {
+                            pat_type.attrs
+                                .iter()
+                                .all(|attr| match attr.meta.clone() {
+                                    syn::Meta::Path(path) => {
+                                        path.segments.last()
+                                            .map(|ps| ps.ident.to_string().ne("rpc_binding"))
+                                            .unwrap_or(true)
+                                    },
+                                    _ => true
+                                })
+                        }).map(|pat_type| {
+                            match *pat_type.pat.clone() {
+                                syn::Pat::Ident(pat_ident) => {pat_ident.ident},
+                                _ => panic!()
+                            }
+                        }).collect()
+                );
                 function_types.push(
-                    item_fn.sig.inputs.iter().map(|fn_arg| match fn_arg {
-                    syn::FnArg::Typed(pat_type) => {
-                        *pat_type.ty.clone()
-                    },
-                    _ => panic!("All functions in must have `#[rpc]' annotation")
-                }).collect());
+                    item_fn.sig.inputs.iter().map(|fn_arg| 
+                        match fn_arg {
+                        syn::FnArg::Typed(pat_type) => {
+                            pat_type
+                        },
+                        _ => panic!("All functions in must have `#[rpc]' annotation")
+                        }).filter(|pat_type| {
+                            pat_type.attrs
+                                .iter()
+                                .all(|attr| match attr.meta.clone() {
+                                    syn::Meta::Path(path) => {
+                                        path.segments.last()
+                                            .map(|ps| ps.ident.to_string().ne("rpc_binding"))
+                                            .unwrap_or(true)
+                                    },
+                                    _ => true
+                                })
+                        }).map(|pat_type| *pat_type.ty.clone())
+                        .collect()
+                );
+                let mut new_item_fn = item_fn.clone();
+
+                new_item_fn
+                    .sig
+                    .inputs
+                    .iter_mut()
+                    .map(|fn_arg| match fn_arg {syn::FnArg::Typed(t) => t, _ => panic!()})
+                    .for_each(|pat_type| pat_type.attrs.retain(|attr|
+                        // Retain IF the attribute is NOT rpc_binding
+                        match &attr.meta {
+                            syn::Meta::Path(p) => 
+                                p.get_ident().is_none_or(|id| id.to_string() != "rpc_binding"),
+                            _ => true
+                        }
+                    ));
+                new_item_fn
+                    .attrs
+                    .retain(|attr|
+                        match &attr.meta {
+                            syn::Meta::Path(p) => 
+                                p.get_ident().is_none_or(|id| id.to_string() != "rpc"),
+                            _ => true
+                        }
+                    );
+
+                new_file_items.push(
+                    syn::Item::Fn(new_item_fn)
+                );
             },
             _ => panic!()
-        };
-    }
+    };
+}
 
     let enum_variant_names: Vec<proc_macro2::Ident> = function_names
         .iter()
@@ -82,7 +172,7 @@ pub fn rpc_functions(item: TokenStream) -> TokenStream {
         b
     };
 
-    let functions = file.items.iter().fold(
+    let functions = new_file_items.iter().fold(
         TokenStream2::new(), 
         append_token_streams,
     );
@@ -90,11 +180,18 @@ pub fn rpc_functions(item: TokenStream) -> TokenStream {
     let rpc_call = quote!{
         #[macro_export]
         macro_rules! rpc_call {
-            ( $args: expr ) => {
+            ( $args: expr  ) => {
                 match $args { #(
                     RpcArgs::#enum_variant_names(
-                            #( #function_fields ),*
-                        ) => #function_names(#( #function_fields ),*)
+                        #( #function_fields ),*
+                    ) => #function_names( #( #function_fields ),*  )
+                ),* }
+            };
+            ( [$($bindings: expr),*] $args: expr  ) => {
+                match $args { #(
+                    RpcArgs::#enum_variant_names(
+                        #( #function_fields ),*
+                    ) => #function_names($($bindings),*, #( #function_fields ),*  )
                 ),* }
             }
         }
@@ -120,18 +217,5 @@ pub fn rpc_functions(item: TokenStream) -> TokenStream {
         #rpc_defer
     };
 
-    /*
-    println!("{}", prettyplease::unparse(
-        &syn::parse2::<syn::File>(output.clone()).expect("")
-    ));
-    */
-
     return TokenStream::from(output);
-}
-
-/// The RPC macro doesn't really do anything, it's moreso a 
-/// annotation that helps with readability
-#[proc_macro_attribute]
-pub fn rpc(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    item
 }
